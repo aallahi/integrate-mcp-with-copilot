@@ -1,24 +1,26 @@
 # Mergington High School Activities API
 
-A super simple FastAPI application that allows students to view and sign up for extracurricular activities.
+A FastAPI application that allows students to view, join, and leave extracurricular activities.
 
 ## Features
 
 - View all available extracurricular activities
 - Sign up for activities
+- Unregister from activities
+- Persist activities and registrations in SQLite
 
 ## Getting Started
 
 1. Install the dependencies:
 
    ```
-   pip install fastapi uvicorn
+   pip install -r requirements.txt
    ```
 
 2. Run the application:
 
    ```
-   python app.py
+   uvicorn app:app --reload --app-dir src
    ```
 
 3. Open your browser and go to:
@@ -31,6 +33,7 @@ A super simple FastAPI application that allows students to view and sign up for 
 | ------ | ----------------------------------------------------------------- | ------------------------------------------------------------------- |
 | GET    | `/activities`                                                     | Get all activities with their details and current participant count |
 | POST   | `/activities/{activity_name}/signup?email=student@mergington.edu` | Sign up for an activity                                             |
+| DELETE | `/activities/{activity_name}/unregister?email=student@mergington.edu` | Unregister from an activity                                      |
 
 ## Data Model
 
@@ -43,8 +46,14 @@ The application uses a simple data model with meaningful identifiers:
    - Maximum number of participants allowed
    - List of student emails who are signed up
 
-2. **Students** - Uses email as identifier:
-   - Name
-   - Grade level
+2. **Students** - Uses email as identifier for now:
+   - Email address
 
-All data is stored in memory, which means data will be reset when the server restarts.
+The application stores data in `src/data/activities.db`. The database is created and seeded with the sample activities the first time the application starts. Existing activity and participant data is preserved on subsequent starts.
+
+To use a different database location, set `ACTIVITY_DB_PATH` before starting the server:
+
+```powershell
+$env:ACTIVITY_DB_PATH = "C:\path\to\activities.db"
+uvicorn app:app --reload --app-dir src
+```
