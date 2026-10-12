@@ -41,3 +41,6 @@ __pycache__
 
 # Env files
 .env
+
+# Local session notes
+/docs/m2_prompt.md
