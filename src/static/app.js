@@ -274,6 +274,8 @@ document.addEventListener("DOMContentLoaded", () => {
       profile[input.name] = input.type === "checkbox" ? input.checked : input.value;
     });
     const id = volunteerSelect.value;
+    const profileControls = [volunteerSelect, ...volunteerForm.elements];
+    profileControls.forEach((input) => { input.disabled = true; });
     try {
       const saved = await staffRequest(id ? `/volunteers/${id}` : "/volunteers",
         id ? "PUT" : "POST", profile);
@@ -282,6 +284,8 @@ document.addEventListener("DOMContentLoaded", () => {
       staffMessage.textContent = "Volunteer profile saved.";
     } catch (error) {
       staffMessage.textContent = error.message;
+    } finally {
+      profileControls.forEach((input) => { input.disabled = false; });
     }
   });
 
