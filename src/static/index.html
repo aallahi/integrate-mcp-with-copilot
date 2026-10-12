@@ -39,6 +39,88 @@
         </form>
         <div id="message" class="hidden"></div>
       </section>
+
+      <section id="staff-container">
+        <h3>Volunteer Staffing (Staff Only)</h3>
+        <form id="staff-login">
+          <div class="form-group">
+            <label for="staff-token">Staff Access Token:</label>
+            <input type="password" id="staff-token" required autocomplete="off" />
+          </div>
+          <button type="submit">Unlock Staff Tools</button>
+        </form>
+        <div id="staff-tools" class="hidden">
+          <button type="button" id="staff-logout">Lock Staff Tools</button>
+          <h4>Volunteer Profile</h4>
+          <div class="form-group">
+            <label for="volunteer-profile">Create or Edit:</label>
+            <select id="volunteer-profile">
+              <option value="">-- New volunteer --</option>
+            </select>
+          </div>
+          <form id="volunteer-form">
+            <div class="form-group">
+              <label for="volunteer-name">Name:</label>
+              <input id="volunteer-name" name="name" required maxlength="200" />
+            </div>
+            <div class="form-group">
+              <label for="volunteer-email">Email:</label>
+              <input type="email" id="volunteer-email" name="email" maxlength="4000" />
+            </div>
+            <div class="form-group">
+              <label for="volunteer-phone">Phone:</label>
+              <input type="tel" id="volunteer-phone" name="phone" maxlength="4000" />
+            </div>
+            <div class="form-group">
+              <label for="volunteer-availability">Availability:</label>
+              <textarea id="volunteer-availability" name="availability" maxlength="4000" placeholder="Days, times, or date ranges"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="volunteer-age-group">Age Group:</label>
+              <input id="volunteer-age-group" name="age_group" maxlength="4000" />
+            </div>
+            <div class="form-group">
+              <label for="volunteer-cycle">Program Cycle:</label>
+              <input id="volunteer-cycle" name="program_cycle" maxlength="4000" />
+            </div>
+            <div class="form-group">
+              <label for="volunteer-interests">Interests:</label>
+              <textarea id="volunteer-interests" name="interests" maxlength="4000"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="volunteer-talents">Talents:</label>
+              <textarea id="volunteer-talents" name="talents" maxlength="4000"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="volunteer-notes">Notes (Staff Only):</label>
+              <textarea id="volunteer-notes" name="notes" maxlength="4000"></textarea>
+            </div>
+            <div class="form-group">
+              <label><input type="checkbox" name="photo_consent" /> Agrees to photos</label>
+              <label><input type="checkbox" name="newsletter_consent" /> Agrees to newsletters</label>
+            </div>
+            <button type="submit">Save Volunteer</button>
+          </form>
+          <h4>Activity Assignments</h4>
+          <form id="assignment-form">
+            <div class="form-group">
+              <label for="assignment-volunteer">Volunteer:</label>
+              <select id="assignment-volunteer" required>
+                <option value="">-- Select a volunteer --</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="assignment-activity">Activity:</label>
+              <select id="assignment-activity" required>
+                <option value="">-- Select an activity --</option>
+              </select>
+            </div>
+            <button type="submit" value="PUT">Assign Volunteer</button>
+            <button type="submit" value="DELETE">Remove Assignment</button>
+          </form>
+        </div>
+        <p id="staff-message" role="status"></p>
+      </section>
     </main>
 
     <footer>

@@ -3,6 +3,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const staffLogin = document.getElementById("staff-login");
+  const staffTools = document.getElementById("staff-tools");
+  const staffMessage = document.getElementById("staff-message");
+  const volunteerForm = document.getElementById("volunteer-form");
+  const volunteerSelect = document.getElementById("volunteer-profile");
+  const assignmentVolunteer = document.getElementById("assignment-volunteer");
+  const assignmentActivity = document.getElementById("assignment-activity");
+  let staffToken = "";
+  let volunteers = [];
+
+  function escapeHTML(value) {
+    const element = document.createElement("span");
+    element.textContent = value;
+    return element.innerHTML.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -13,6 +28,10 @@ document.addEventListener("DOMContentLoaded", () => {
       // Clear loading message
       activitiesList.innerHTML = "";
       activitySelect.querySelectorAll("option:not(:first-child)").forEach((option) => {
+        option.remove();
+      });
+      const selectedAssignmentActivity = assignmentActivity.value;
+      assignmentActivity.querySelectorAll("option:not(:first-child)").forEach((option) => {
         option.remove();
       });
 
@@ -33,7 +52,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${details.participants
                   .map(
                     (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                      `<li><span class="participant-email">${escapeHTML(email)}</span><button class="delete-btn" data-activity="${escapeHTML(name)}" data-email="${escapeHTML(email)}">❌</button></li>`
                   )
                   .join("")}
               </ul>
@@ -41,12 +60,19 @@ document.addEventListener("DOMContentLoaded", () => {
             : `<p><em>No participants yet</em></p>`;
 
         activityCard.innerHTML = `
-          <h4>${name}</h4>
-          <p>${details.description}</p>
-          <p><strong>Schedule:</strong> ${details.schedule}</p>
+          <h4>${escapeHTML(name)}</h4>
+          <p>${escapeHTML(details.description)}</p>
+          <p><strong>Schedule:</strong> ${escapeHTML(details.schedule)}</p>
           <p><strong>Availability:</strong> ${spotsLeft} spots left</p>
           <div class="participants-container">
             ${participantsHTML}
+          </div>
+          <div class="participants-container participants-section">
+            <h5>Assigned Volunteers:</h5>
+            ${details.volunteers.length
+              ? `<ul>${details.volunteers.map((volunteer) =>
+                `<li>${escapeHTML(volunteer.name)}</li>`).join("")}</ul>`
+              : "<p>No volunteers assigned yet</p>"}
           </div>
         `;
 
@@ -57,7 +83,9 @@ document.addEventListener("DOMContentLoaded", () => {
         option.value = name;
         option.textContent = name;
         activitySelect.appendChild(option);
+        assignmentActivity.appendChild(option.cloneNode(true));
       });
+      assignmentActivity.value = selectedAssignmentActivity;
 
       // Add event listeners to delete buttons
       document.querySelectorAll(".delete-btn").forEach((button) => {
@@ -155,6 +183,119 @@ document.addEventListener("DOMContentLoaded", () => {
       messageDiv.className = "error";
       messageDiv.classList.remove("hidden");
       console.error("Error signing up:", error);
+    }
+  });
+
+  function lockStaffTools() {
+    staffToken = "";
+    volunteers = [];
+    staffLogin.reset();
+    volunteerForm.reset();
+    [volunteerSelect, assignmentVolunteer].forEach((select) => {
+      select.querySelectorAll("option:not(:first-child)").forEach((option) => option.remove());
+      select.value = "";
+    });
+    staffTools.classList.add("hidden");
+    staffLogin.classList.remove("hidden");
+  }
+
+  async function staffRequest(path, method = "GET", body) {
+    const requestToken = staffToken;
+    const response = await fetch(path, {
+      method,
+      headers: {
+        Authorization: "Bearer " + requestToken,
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+    const result = await response.json();
+    if (staffToken !== requestToken) throw new Error("Staff tools are locked.");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 503) lockStaffTools();
+      throw new Error(typeof result.detail === "string"
+        ? result.detail : "Please check the volunteer profile fields.");
+    }
+    return result;
+  }
+
+  async function fetchVolunteers(selectedId = volunteerSelect.value) {
+    volunteers = await staffRequest("/volunteers");
+    [volunteerSelect, assignmentVolunteer].forEach((select) => {
+      const previous = select.value;
+      select.querySelectorAll("option:not(:first-child)").forEach((option) => option.remove());
+      volunteers.forEach((volunteer) => {
+        const option = document.createElement("option");
+        option.value = volunteer.id;
+        option.textContent = `${volunteer.name} (#${volunteer.id})`;
+        select.appendChild(option);
+      });
+      select.value = previous;
+    });
+    volunteerSelect.value = selectedId;
+  }
+
+  staffLogin.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    staffToken = document.getElementById("staff-token").value;
+    try {
+      await fetchVolunteers();
+      staffLogin.reset();
+      staffLogin.classList.add("hidden");
+      staffTools.classList.remove("hidden");
+      staffMessage.textContent = "Staff tools unlocked.";
+    } catch (error) {
+      lockStaffTools();
+      staffMessage.textContent = error.message;
+    }
+  });
+
+  document.getElementById("staff-logout").addEventListener("click", () => {
+    lockStaffTools();
+    staffMessage.textContent = "Staff tools locked.";
+  });
+
+  volunteerSelect.addEventListener("change", () => {
+    volunteerForm.reset();
+    const volunteer = volunteers.find((item) => String(item.id) === volunteerSelect.value);
+    if (volunteer) {
+      Array.from(volunteerForm.elements).filter((input) => input.name).forEach((input) => {
+        if (input.type === "checkbox") input.checked = volunteer[input.name];
+        else input.value = volunteer[input.name];
+      });
+    }
+  });
+
+  volunteerForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const profile = {};
+    Array.from(volunteerForm.elements).filter((input) => input.name).forEach((input) => {
+      profile[input.name] = input.type === "checkbox" ? input.checked : input.value;
+    });
+    const id = volunteerSelect.value;
+    try {
+      const saved = await staffRequest(id ? `/volunteers/${id}` : "/volunteers",
+        id ? "PUT" : "POST", profile);
+      await fetchVolunteers(String(saved.id));
+      await fetchActivities();
+      staffMessage.textContent = "Volunteer profile saved.";
+    } catch (error) {
+      staffMessage.textContent = error.message;
+    }
+  });
+
+  document.getElementById("assignment-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await staffRequest(
+        `/activities/${encodeURIComponent(assignmentActivity.value)}/volunteers/${assignmentVolunteer.value}`,
+        event.submitter?.value || "PUT"
+      );
+      await fetchActivities();
+      staffMessage.textContent = result.message;
+    } catch (error) {
+      staffMessage.textContent = error.message;
     }
   });
 

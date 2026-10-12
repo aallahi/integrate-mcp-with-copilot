@@ -141,12 +141,21 @@ section h3 {
 }
 
 .form-group input,
+.form-group textarea,
 .form-group select {
   width: 100%;
   padding: 10px;
   border: 1px solid #ddd;
   border-radius: 4px;
   font-size: 16px;
+}
+
+.form-group input[type="checkbox"] {
+  width: auto;
+}
+
+#staff-tools h4 {
+  margin: 20px 0 10px;
 }
 
 button {

@@ -8,6 +8,8 @@ A FastAPI application that allows students to view, join, and leave extracurricu
 - Sign up for activities
 - Unregister from activities
 - Persist activities and registrations in SQLite
+- Create and update staff-only volunteer profiles, including availability and preferences
+- Assign volunteers to activities, with volunteer rosters separate from students
 
 ## Getting Started
 
@@ -34,6 +36,40 @@ A FastAPI application that allows students to view, join, and leave extracurricu
 | GET    | `/activities`                                                     | Get all activities with their details and current participant count |
 | POST   | `/activities/{activity_name}/signup?email=student@mergington.edu` | Sign up for an activity                                             |
 | DELETE | `/activities/{activity_name}/unregister?email=student@mergington.edu` | Unregister from an activity                                      |
+| GET    | `/volunteers` | List complete volunteer profiles (staff only) |
+| POST   | `/volunteers` | Create a volunteer profile (staff only) |
+| PUT    | `/volunteers/{volunteer_id}` | Replace a volunteer profile (staff only) |
+| PUT    | `/activities/{activity_name}/volunteers/{volunteer_id}` | Assign a volunteer; repeated assignments are harmless (staff only) |
+| DELETE | `/activities/{activity_name}/volunteers/{volunteer_id}` | Remove a volunteer assignment (staff only) |
+
+## Volunteer Staffing
+
+Before starting the server, set `STAFF_API_TOKEN` to a securely generated secret
+(for example, generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+Share it only with authorized staff and use HTTPS outside local development.
+Do not commit the token. Staff access is disabled if this variable is unset.
+
+In the website's **Volunteer Staffing** panel, enter the token to unlock the tools.
+Create a profile or select an existing one to edit it, then select a volunteer and
+activity to assign or remove staffing. Lock the tools when finished. The token is
+kept only in page memory and is not saved in browser storage.
+
+Staff API requests require an `Authorization` header with the `Bearer` scheme
+followed by the configured token. Profile JSON contains a required nonblank `name`
+(up to 200 characters) and optional `email`, `phone`, `availability`, `age_group`,
+`program_cycle`, `interests`, `talents`, and `notes` text fields (up to 4,000
+characters each). Availability accepts days, times, or date ranges as free text.
+`photo_consent` and `newsletter_consent` are booleans, defaulting to `false`.
+Updates replace the profile, so include all fields you wish to keep.
+
+Volunteer profiles and assignments persist in the same SQLite database. Public
+activity rosters expose only volunteer IDs and names; contact details, availability,
+notes, and preferences are staff-only. Assignments do not consume student places.
+This app currently supports activity-level staffing, not individual dated sessions.
+
+## Tests
+
+From the repository root, run `python -m unittest discover -s tests -v`.
 
 ## Data Model
 
