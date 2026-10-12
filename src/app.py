@@ -8,11 +8,14 @@ for extracurricular activities at Mergington High School.
 from contextlib import closing
 import os
 from pathlib import Path
+import secrets
 import sqlite3
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -83,6 +86,48 @@ DATABASE_PATH = Path(
     os.getenv("ACTIVITY_DB_PATH", current_dir / "data" / "activities.db")
 )
 
+staff_bearer = HTTPBearer(auto_error=False)
+
+
+def require_staff(
+    credentials: HTTPAuthorizationCredentials | None = Depends(staff_bearer),
+):
+    token = os.getenv("STAFF_API_TOKEN")
+    if not token:
+        raise HTTPException(status_code=503, detail="Staff access is not configured")
+    if credentials is None or not secrets.compare_digest(
+        credentials.credentials.encode(), token.encode()
+    ):
+        raise HTTPException(
+            status_code=401, detail="Staff authorization required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class VolunteerProfile(BaseModel):
+    model_config = ConfigDict(
+        str_strip_whitespace=True, str_max_length=4000, extra="forbid"
+    )
+
+    name: str = Field(min_length=1, max_length=200)
+    email: str = ""
+    phone: str = ""
+    availability: str = ""
+    age_group: str = ""
+    program_cycle: str = ""
+    interests: str = ""
+    talents: str = ""
+    notes: str = ""
+    photo_consent: bool = False
+    newsletter_consent: bool = False
+
+
+def volunteer_record(row):
+    record = dict(row)
+    for field in ("photo_consent", "newsletter_consent"):
+        record[field] = bool(record[field])
+    return record
+
 
 def get_connection():
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +153,31 @@ def initialize_database():
                 email TEXT NOT NULL,
                 PRIMARY KEY (activity_name, email),
                 FOREIGN KEY (activity_name) REFERENCES activities(name)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS volunteers (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                availability TEXT NOT NULL,
+                age_group TEXT NOT NULL,
+                program_cycle TEXT NOT NULL,
+                interests TEXT NOT NULL,
+                talents TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                photo_consent INTEGER NOT NULL DEFAULT 0,
+                newsletter_consent INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS volunteer_assignments (
+                activity_name TEXT NOT NULL,
+                volunteer_id INTEGER NOT NULL,
+                PRIMARY KEY (activity_name, volunteer_id),
+                FOREIGN KEY (activity_name) REFERENCES activities(name)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (volunteer_id) REFERENCES volunteers(id)
                     ON DELETE CASCADE
             );
             """
@@ -155,7 +225,16 @@ def load_activities():
         participant_rows = connection.execute(
             "SELECT activity_name, email FROM registrations ORDER BY email"
         ).fetchall()
+        volunteer_rows = connection.execute(
+            "SELECT a.activity_name, v.id, v.name FROM volunteer_assignments a "
+            "JOIN volunteers v ON v.id = a.volunteer_id ORDER BY v.name, v.id"
+        ).fetchall()
 
+    volunteers_by_activity = {}
+    for row in volunteer_rows:
+        volunteers_by_activity.setdefault(row["activity_name"], []).append(
+            {"id": row["id"], "name": row["name"]}
+        )
     participants_by_activity = {}
     for row in participant_rows:
         participants_by_activity.setdefault(row["activity_name"], []).append(
@@ -168,6 +247,7 @@ def load_activities():
             "schedule": row["schedule"],
             "max_participants": row["max_participants"],
             "participants": participants_by_activity.get(row["name"], []),
+            "volunteers": volunteers_by_activity.get(row["name"], []),
         }
         for row in activity_rows
     }
@@ -184,6 +264,91 @@ def root():
 @app.get("/activities")
 def get_activities():
     return load_activities()
+
+
+@app.get("/volunteers", dependencies=[Depends(require_staff)])
+def get_volunteers():
+    with closing(get_connection()) as connection:
+        return [
+            volunteer_record(row) for row in connection.execute(
+                "SELECT * FROM volunteers ORDER BY name, id"
+            )
+        ]
+
+
+@app.post("/volunteers", status_code=201, dependencies=[Depends(require_staff)])
+def create_volunteer(profile: VolunteerProfile):
+    values = profile.model_dump()
+    columns = ", ".join(values)
+    placeholders = ", ".join("?" for _ in values)
+    with closing(get_connection()) as connection:
+        result = connection.execute(
+            f"INSERT INTO volunteers ({columns}) VALUES ({placeholders})",
+            tuple(values.values()),
+        )
+        row = connection.execute(
+            "SELECT * FROM volunteers WHERE id = ?", (result.lastrowid,)
+        ).fetchone()
+        connection.commit()
+    return volunteer_record(row)
+
+
+@app.put("/volunteers/{volunteer_id}", dependencies=[Depends(require_staff)])
+def update_volunteer(volunteer_id: int, profile: VolunteerProfile):
+    values = profile.model_dump()
+    fields = ", ".join(f"{field} = ?" for field in values)
+    with closing(get_connection()) as connection:
+        result = connection.execute(
+            f"UPDATE volunteers SET {fields} WHERE id = ?",
+            (*values.values(), volunteer_id),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Volunteer not found")
+        row = connection.execute(
+            "SELECT * FROM volunteers WHERE id = ?", (volunteer_id,)
+        ).fetchone()
+        connection.commit()
+    return volunteer_record(row)
+
+
+@app.put(
+    "/activities/{activity_name}/volunteers/{volunteer_id}",
+    dependencies=[Depends(require_staff)],
+)
+def assign_volunteer(activity_name: str, volunteer_id: int):
+    with closing(get_connection()) as connection:
+        if connection.execute(
+            "SELECT 1 FROM activities WHERE name = ?", (activity_name,)
+        ).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        if connection.execute(
+            "SELECT 1 FROM volunteers WHERE id = ?", (volunteer_id,)
+        ).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found")
+        connection.execute(
+            "INSERT OR IGNORE INTO volunteer_assignments "
+            "(activity_name, volunteer_id) VALUES (?, ?)",
+            (activity_name, volunteer_id),
+        )
+        connection.commit()
+    return {"message": f"Volunteer assigned to {activity_name}"}
+
+
+@app.delete(
+    "/activities/{activity_name}/volunteers/{volunteer_id}",
+    dependencies=[Depends(require_staff)],
+)
+def unassign_volunteer(activity_name: str, volunteer_id: int):
+    with closing(get_connection()) as connection:
+        result = connection.execute(
+            "DELETE FROM volunteer_assignments "
+            "WHERE activity_name = ? AND volunteer_id = ?",
+            (activity_name, volunteer_id),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Volunteer assignment not found")
+        connection.commit()
+    return {"message": f"Volunteer removed from {activity_name}"}
 
 
 @app.post("/activities/{activity_name}/signup")
