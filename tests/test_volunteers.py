@@ -6,6 +6,7 @@ from pathlib import Path
 import secrets
 import tempfile
 import unittest
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 
@@ -34,9 +35,11 @@ class VolunteersApiTests(unittest.TestCase):
             headers = [(b"content-type", b"application/json")]
             if token is not None:
                 headers.append((b"authorization", ("Bearer " + token).encode()))
+            url = urlsplit(path)
             scope = {
                 "type": "http", "http_version": "1.1", "method": method,
-                "scheme": "http", "path": path, "query_string": b"",
+                "scheme": "http", "path": url.path,
+                "query_string": url.query.encode(),
                 "headers": headers, "server": ("test", 80), "client": ("test", 123),
             }
 
@@ -99,10 +102,16 @@ class VolunteersApiTests(unittest.TestCase):
     def test_all_staff_routes_require_authorization(self):
         routes = [
             ("GET", "/volunteers", None),
+            ("GET", "/registrations", None),
             ("POST", "/volunteers", {"name": "Alex"}),
             ("PUT", "/volunteers/1", {"name": "Alex"}),
+            ("PUT", "/activities/Chess Club/price", {"price_cents": 100}),
             ("PUT", "/activities/Chess Club/volunteers/1", None),
             ("DELETE", "/activities/Chess Club/volunteers/1", None),
+            ("POST", "/activities/Chess Club/payments", {
+                "email": "student@example.org", "amount_cents": 100,
+                "payment_type": "cash",
+            }),
         ]
         for method, path, body in routes:
             for token in (None, "invalid"):
@@ -113,6 +122,48 @@ class VolunteersApiTests(unittest.TestCase):
                 self.request("GET", "/volunteers", token=self.token)[0], 503
             )
         self.assertEqual(self.request("GET", "/activities")[0], 200)
+
+    def test_partial_full_and_overpayment_are_handled(self):
+        status, price = self.request(
+            "PUT", "/activities/Chess Club/price", {"price_cents": 1000},
+            token=self.token,
+        )
+        self.assertEqual(status, 200)
+        email = "payments@example.org"
+        self.assertEqual(
+            self.request(
+                "POST",
+                f"/activities/Chess Club/signup?email={email}",
+            )[0], 200
+        )
+        status, registrations = self.request(
+            "GET", "/registrations", token=self.token
+        )
+        self.assertEqual(status, 200)
+        registration = next(
+            item for item in registrations if item["email"] == email
+        )
+        self.assertEqual(registration["balance_cents"], 1000)
+        payment = {
+            "email": email, "amount_cents": 400, "payment_type": "cash"
+        }
+        status, result = self.request(
+            "POST", "/activities/Chess Club/payments", payment, self.token
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(result["balance_after_cents"], 600)
+        status, result = self.request(
+            "POST", "/activities/Chess Club/payments",
+            {**payment, "amount_cents": 600}, self.token
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(result["balance_after_cents"], 0)
+        status, result = self.request(
+            "POST", "/activities/Chess Club/payments",
+            {**payment, "amount_cents": 1}, self.token
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(result["detail"], "Payment exceeds outstanding balance")
 
     def test_assignments_are_separate_private_and_do_not_use_student_spots(self):
         volunteer = self.create_profile()

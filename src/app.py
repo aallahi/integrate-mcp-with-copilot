@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -122,6 +123,21 @@ class VolunteerProfile(BaseModel):
     newsletter_consent: bool = False
 
 
+class PaymentCreate(BaseModel):
+    model_config = ConfigDict(
+        str_strip_whitespace=True, str_max_length=100, extra="forbid"
+    )
+
+    email: str = Field(min_length=1, max_length=320)
+    amount_cents: int = Field(gt=0)
+    payment_type: str = Field(min_length=1, max_length=50)
+    paid_at: datetime | None = None
+
+
+class ActivityPrice(BaseModel):
+    price_cents: int = Field(ge=0)
+
+
 def volunteer_record(row):
     record = dict(row)
     for field in ("photo_consent", "newsletter_consent"):
@@ -145,14 +161,29 @@ def initialize_database():
                 name TEXT PRIMARY KEY,
                 description TEXT NOT NULL,
                 schedule TEXT NOT NULL,
-                max_participants INTEGER NOT NULL
+                max_participants INTEGER NOT NULL,
+                price_cents INTEGER NOT NULL DEFAULT 0 CHECK (price_cents >= 0)
             );
 
             CREATE TABLE IF NOT EXISTS registrations (
                 activity_name TEXT NOT NULL,
                 email TEXT NOT NULL,
+                balance_cents INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
                 PRIMARY KEY (activity_name, email),
                 FOREIGN KEY (activity_name) REFERENCES activities(name)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY,
+                activity_name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+                payment_type TEXT NOT NULL,
+                paid_at TEXT NOT NULL,
+                balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0),
+                FOREIGN KEY (activity_name, email)
+                    REFERENCES registrations(activity_name, email)
                     ON DELETE CASCADE
             );
 
@@ -183,14 +214,33 @@ def initialize_database():
             """
         )
 
+        # Keep databases created before payment tracking compatible.
+        activity_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(activities)")
+        }
+        if "price_cents" not in activity_columns:
+            connection.execute(
+                "ALTER TABLE activities ADD COLUMN price_cents INTEGER NOT NULL DEFAULT 0"
+            )
+        registration_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(registrations)")
+        }
+        if "balance_cents" not in registration_columns:
+            connection.execute(
+                "ALTER TABLE registrations ADD COLUMN balance_cents INTEGER "
+                "NOT NULL DEFAULT 0"
+            )
+
         activity_count = connection.execute(
             "SELECT COUNT(*) FROM activities"
         ).fetchone()[0]
         if activity_count == 0:
             connection.executemany(
                 """
-                INSERT INTO activities (name, description, schedule, max_participants)
-                VALUES (:name, :description, :schedule, :max_participants)
+                INSERT INTO activities
+                    (name, description, schedule, max_participants, price_cents)
+                VALUES (:name, :description, :schedule, :max_participants, 0)
                 """,
                 [
                     {
@@ -220,7 +270,7 @@ def load_activities():
     with closing(get_connection()) as connection:
         activity_rows = connection.execute(
             "SELECT name, description, schedule, max_participants "
-            "FROM activities ORDER BY name"
+            ", price_cents FROM activities ORDER BY name"
         ).fetchall()
         participant_rows = connection.execute(
             "SELECT activity_name, email FROM registrations ORDER BY email"
@@ -246,6 +296,7 @@ def load_activities():
             "description": row["description"],
             "schedule": row["schedule"],
             "max_participants": row["max_participants"],
+            "price_cents": row["price_cents"],
             "participants": participants_by_activity.get(row["name"], []),
             "volunteers": volunteers_by_activity.get(row["name"], []),
         }
@@ -264,6 +315,49 @@ def root():
 @app.get("/activities")
 def get_activities():
     return load_activities()
+
+
+@app.get("/registrations", dependencies=[Depends(require_staff)])
+def get_registrations():
+    with closing(get_connection()) as connection:
+        rows = connection.execute(
+            """
+            SELECT r.activity_name, r.email, a.price_cents, r.balance_cents
+            FROM registrations r
+            JOIN activities a ON a.name = r.activity_name
+            ORDER BY r.activity_name, r.email
+            """
+        ).fetchall()
+        result = []
+        for row in rows:
+            registration = dict(row)
+            registration["payments"] = [
+                dict(payment)
+                for payment in connection.execute(
+                    """
+                    SELECT amount_cents, payment_type, paid_at, balance_after_cents
+                    FROM payments
+                    WHERE activity_name = ? AND email = ?
+                    ORDER BY paid_at, id
+                    """,
+                    (row["activity_name"], row["email"]),
+                ).fetchall()
+            ]
+            result.append(registration)
+        return result
+
+
+@app.put("/activities/{activity_name}/price", dependencies=[Depends(require_staff)])
+def set_activity_price(activity_name: str, price: ActivityPrice):
+    with closing(get_connection()) as connection:
+        result = connection.execute(
+            "UPDATE activities SET price_cents = ? WHERE name = ?",
+            (price.price_cents, activity_name),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        connection.commit()
+    return {"activity": activity_name, "price_cents": price.price_cents}
 
 
 @app.get("/volunteers", dependencies=[Depends(require_staff)])
@@ -356,7 +450,7 @@ def signup_for_activity(activity_name: str, email: str):
     """Sign up a student for an activity"""
     with closing(get_connection()) as connection:
         activity = connection.execute(
-            "SELECT max_participants FROM activities WHERE name = ?",
+            "SELECT max_participants, price_cents FROM activities WHERE name = ?",
             (activity_name,),
         ).fetchone()
         if activity is None:
@@ -371,8 +465,11 @@ def signup_for_activity(activity_name: str, email: str):
 
         try:
             connection.execute(
-                "INSERT INTO registrations (activity_name, email) VALUES (?, ?)",
-                (activity_name, email),
+                """
+                INSERT INTO registrations (activity_name, email, balance_cents)
+                VALUES (?, ?, ?)
+                """,
+                (activity_name, email, activity["price_cents"]),
             )
         except sqlite3.IntegrityError:
             raise HTTPException(
@@ -382,6 +479,60 @@ def signup_for_activity(activity_name: str, email: str):
         connection.commit()
 
     return {"message": f"Signed up {email} for {activity_name}"}
+
+
+@app.post(
+    "/activities/{activity_name}/payments",
+    status_code=201,
+    dependencies=[Depends(require_staff)],
+)
+def record_payment(activity_name: str, payment: PaymentCreate):
+    paid_at = payment.paid_at or datetime.now(timezone.utc)
+    with closing(get_connection()) as connection:
+        registration = connection.execute(
+            """
+            SELECT balance_cents FROM registrations
+            WHERE activity_name = ? AND email = ?
+            """,
+            (activity_name, payment.email),
+        ).fetchone()
+        if registration is None:
+            raise HTTPException(status_code=404, detail="Registration not found")
+        if payment.amount_cents > registration["balance_cents"]:
+            raise HTTPException(status_code=400, detail="Payment exceeds outstanding balance")
+        balance_after = registration["balance_cents"] - payment.amount_cents
+        connection.execute(
+            """
+            INSERT INTO payments
+                (activity_name, email, amount_cents, payment_type, paid_at,
+                 balance_after_cents)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                activity_name,
+                payment.email,
+                payment.amount_cents,
+                payment.payment_type,
+                paid_at.isoformat(),
+                balance_after,
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE registrations SET balance_cents = ?
+            WHERE activity_name = ? AND email = ?
+            """,
+            (balance_after, activity_name, payment.email),
+        )
+        connection.commit()
+    return {
+        "activity_name": activity_name,
+        "email": payment.email,
+        "amount_cents": payment.amount_cents,
+        "payment_type": payment.payment_type,
+        "paid_at": paid_at.isoformat(),
+        "balance_after_cents": balance_after,
+    }
 
 
 @app.delete("/activities/{activity_name}/unregister")

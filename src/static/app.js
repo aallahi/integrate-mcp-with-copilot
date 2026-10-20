@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const staffLogin = document.getElementById("staff-login");
   const staffTools = document.getElementById("staff-tools");
   const staffMessage = document.getElementById("staff-message");
+  const staffPayments = document.getElementById("staff-payments");
   const volunteerForm = document.getElementById("volunteer-form");
   const volunteerSelect = document.getElementById("volunteer-profile");
   const assignmentVolunteer = document.getElementById("assignment-volunteer");
@@ -63,6 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <h4>${escapeHTML(name)}</h4>
           <p>${escapeHTML(details.description)}</p>
           <p><strong>Schedule:</strong> ${escapeHTML(details.schedule)}</p>
+          <p><strong>Price:</strong> ${details.price_cents ? `$${(details.price_cents / 100).toFixed(2)}` : "Free"}</p>
           <p><strong>Availability:</strong> ${spotsLeft} spots left</p>
           <div class="participants-container">
             ${participantsHTML}
@@ -236,11 +238,22 @@ document.addEventListener("DOMContentLoaded", () => {
     volunteerSelect.value = selectedId;
   }
 
+  async function fetchPaymentStatus() {
+    const registrations = await staffRequest("/registrations");
+    staffPayments.innerHTML = registrations.length
+      ? registrations.map((registration) =>
+        `<li>${escapeHTML(registration.email)} — ${escapeHTML(registration.activity_name)}: ` +
+        `${(registration.balance_cents / 100).toFixed(2)} outstanding</li>`
+      ).join("")
+      : "<li>No registrations.</li>";
+  }
+
   staffLogin.addEventListener("submit", async (event) => {
     event.preventDefault();
     staffToken = document.getElementById("staff-token").value;
     try {
       await fetchVolunteers();
+      await fetchPaymentStatus();
       staffLogin.reset();
       staffLogin.classList.add("hidden");
       staffTools.classList.remove("hidden");
